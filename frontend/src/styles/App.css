@@ -1147,7 +1147,16 @@ body {
   transform: translateY(-2px);
 }
 
+/* Sarvam AI Theme styling */
+.theme-sarvam::before {
+  background: linear-gradient(90deg, #8b5cf6, #ec4899);
+}
 
+.bg-sarvam {
+  background: #8b5cf6;
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.35);
+}
 
-
-
+.text-sarvam {
+  color: #8b5cf6;
+}

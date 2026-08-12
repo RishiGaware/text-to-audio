@@ -1,7 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
 import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
-import './App.css'
+import './styles/App.css'
+import ElevenLabsControls from './components/controls/ElevenLabsControls'
+import OpenAIControls from './components/controls/OpenAIControls'
+import AzureControls from './components/controls/AzureControls'
+import SarvamControls from './components/controls/SarvamControls'
+import {
+  synthesizeOpenAISpeech,
+  fetchOpenAIModels,
+  synthesizeElevenLabsSpeech,
+  fetchElevenLabsVoices,
+  fetchElevenLabsModels,
+  synthesizeAzureSpeech,
+  synthesizeSarvamSpeech
+} from './services/ttsService'
 
 // Configuration array for engine comparisons.
 const COMPARISON_DATA = [
@@ -37,6 +50,17 @@ const COMPARISON_DATA = [
     badge: 'Paid Option',
     badgeClass: 'paid',
     isEleven: false
+  },
+  {
+    rank: 4,
+    name: 'Sarvam AI Text-to-Speech',
+    quality: '⭐⭐⭐⭐⭐',
+    limit: 'Indic Languages Focus',
+    voices: '30+ Indian Expressive Voices',
+    focus: 'Optimized specifically for Indian languages with natural inflection, supporting Hindi, Bengali, Tamil, Telugu, and more.',
+    badge: 'Regional Focus',
+    badgeClass: 'free',
+    isEleven: false
   }
 ];
 
@@ -49,6 +73,21 @@ const FREE_TIER_PREMADE_VOICES = [
   { voice_id: 'JBFqnCBsd6RMkjVDRZzb', name: 'George - Warm, Captivating Storyteller' },
   { voice_id: 'N2lVS1w4EtoT3dr4eOWO', name: 'Callum - Husky Trickster' },
   { voice_id: 'SAz9YHcvj6GT2YYXdXww', name: 'River - Relaxed, Neutral, Informative' }
+];
+
+// Verified working premade voices from OpenAI TTS voice list
+const OPENAI_VOICE_OPTIONS = [
+  { voice_id: 'alloy', name: 'Alloy (Balanced)' },
+  { voice_id: 'ash', name: 'Ash (Gentle)' },
+  { voice_id: 'ballad', name: 'Ballad (Expressive/Male)' },
+  { voice_id: 'coral', name: 'Coral (Warm/Female)' },
+  { voice_id: 'echo', name: 'Echo (Warm)' },
+  { voice_id: 'fable', name: 'Fable (Narrative)' },
+  { voice_id: 'onyx', name: 'Onyx (Deep/Male)' },
+  { voice_id: 'nova', name: 'Nova (Energetic/Female)' },
+  { voice_id: 'sage', name: 'Sage (Friendly)' },
+  { voice_id: 'shimmer', name: 'Shimmer (Professional)' },
+  { voice_id: 'verse', name: 'Verse (Poetic)' }
 ];
 
 function App() {
@@ -98,14 +137,25 @@ function App() {
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0)
 
   // OpenAI states
+  const [openaiVoices, setOpenaiVoices] = useState(OPENAI_VOICE_OPTIONS)
   const [openaiVoice, setOpenaiVoice] = useState('alloy')
+  const [openaiModels, setOpenaiModels] = useState([
+    { model_id: 'tts-1', name: 'TTS-1 (Standard)' },
+    { model_id: 'tts-1-hd', name: 'TTS-1-HD (High Definition)' }
+  ])
   const [openaiModel, setOpenaiModel] = useState('tts-1')
   const [openaiFormat, setOpenaiFormat] = useState('mp3')
   const [isSyncingOpenaiVoices, setIsSyncingOpenaiVoices] = useState(false)
-  const [isSyncingOpenaiModels, setIsSyncingOpenaiModels] = useState(false)
+  const [isFetchingOpenaiModels, setIsFetchingOpenaiModels] = useState(false)
 
   // Azure states
   const [azureVoice, setAzureVoice] = useState('en-US-JennyNeural')
+
+  // Sarvam states
+  const [sarvamModel, setSarvamModel] = useState('bulbul:v3')
+  const [sarvamLanguage, setSarvamLanguage] = useState('hi-IN')
+  const [sarvamSpeaker, setSarvamSpeaker] = useState('shubh')
+  const [sarvamPace, setSarvamPace] = useState(1.0)
 
   // General playback states
   const [isPlaying, setIsPlaying] = useState(false)
@@ -127,6 +177,9 @@ function App() {
   // Save keys to localStorage
   useEffect(() => {
     localStorage.setItem('voxflow_openai_key', openaiKey)
+    if (openaiKey && !openaiKey.includes('DEMO_OPENAI_API_KEY')) {
+      fetchOpenaiModels()
+    }
   }, [openaiKey])
   useEffect(() => {
     localStorage.setItem('voxflow_eleven_key', elevenKey)
@@ -140,17 +193,7 @@ function App() {
     if (!elevenKey || elevenKey.includes('DEMO_ELEVENLABS')) return
     setIsFetchingModels(true)
     try {
-      const response = await fetch('https://api.elevenlabs.io/v1/models', {
-        method: 'GET',
-        headers: {
-          'xi-api-key': elevenKey
-        }
-      })
-      if (!response.ok) {
-        console.warn(`ElevenLabs API models endpoint returned status ${response.status}. Using local static model defaults.`);
-        return
-      }
-      const data = await response.json()
+      const data = await fetchElevenLabsModels(elevenKey)
       if (data && data.length > 0) {
         // Filter to models that support text-to-speech
         const ttsModels = data.filter(m => m.can_do_text_to_speech)
@@ -167,6 +210,7 @@ function App() {
     } finally {
       setIsFetchingModels(false)
     }
+  }
 
   const syncOpenaiVoices = () => {
     setIsSyncingOpenaiVoices(true)
@@ -177,32 +221,45 @@ function App() {
   }
 
   const syncOpenaiModels = () => {
-    setIsSyncingOpenaiModels(true)
-    setTimeout(() => {
-      setIsSyncingOpenaiModels(false)
-      showToast('✨ OpenAI standard speech models synchronized successfully.')
-    }, 800)
+    fetchOpenaiModels()
   }
+
+  const fetchOpenaiModels = async () => {
+    if (!openaiKey || openaiKey.includes('DEMO_OPENAI_API_KEY')) return
+    setIsFetchingOpenaiModels(true)
+    try {
+      const data = await fetchOpenAIModels(openaiKey)
+      if (data && data.length > 0) {
+        const ttsModels = data
+          .filter(m => m.id.includes('tts'))
+          .map(m => ({
+            model_id: m.id,
+            name: m.id.toUpperCase() + (m.id.includes('hd') ? ' (High Definition)' : ' (Standard)')
+          }))
+        if (ttsModels.length > 0) {
+          setOpenaiModels(ttsModels)
+          if (!ttsModels.some(m => m.model_id === openaiModel)) {
+            setOpenaiModel(ttsModels[0].model_id)
+          }
+          showToast('✨ OpenAI speech models synchronized successfully.')
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch OpenAI models:', e)
+      showToast('❌ Failed to fetch OpenAI models.')
+    } finally {
+      setIsFetchingOpenaiModels(false)
+    }
   }
 
   const fetchElevenVoices = async () => {
     if (!elevenKey || elevenKey.includes('DEMO_ELEVENLABS')) return
     setIsFetchingVoices(true)
     try {
-      const response = await fetch('https://api.elevenlabs.io/v1/voices', {
-        method: 'GET',
-        headers: {
-          'xi-api-key': elevenKey
-        }
-      })
-      if (!response.ok) {
-        console.warn(`ElevenLabs API voices endpoint returned status ${response.status}. Using local static voice defaults.`);
-        return
-      }
-      const data = await response.json()
-      if (data.voices && data.voices.length > 0) {
+      const voices = await fetchElevenLabsVoices(elevenKey)
+      if (voices && voices.length > 0) {
         // Keep only premade voices to adhere to free tier parameter requirements
-        const premadeOnly = data.voices.filter(v => v.category === 'premade')
+        const premadeOnly = voices.filter(v => v.category === 'premade')
         if (premadeOnly.length > 0) {
           setElevenVoices(premadeOnly)
           // If current voice is not in the new list, switch to the first available one
@@ -318,31 +375,14 @@ function App() {
           setIsLoading(false)
           return
         }
-        const response = await fetch('https://api.openai.com/v1/audio/speech', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${openaiKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: openaiModel,
-            input: text,
-            voice: openaiVoice,
-            response_format: openaiFormat,
-            speed: playbackSpeed // OpenAI accepts speed values directly in the synthesis API request body
-          })
+        responseBlob = await synthesizeOpenAISpeech({
+          key: openaiKey,
+          model: openaiModel,
+          text: text,
+          voice: openaiVoice,
+          format: openaiFormat,
+          speed: playbackSpeed
         })
-        if (!response.ok) {
-          const errText = await response.text()
-          let errMsg = errText
-          try {
-            const errJson = JSON.parse(errText)
-            if (errJson.detail && errJson.detail.message) errMsg = errJson.detail.message
-            else if (errJson.error && errJson.error.message) errMsg = errJson.error.message
-          } catch (e) {}
-          throw new Error(errMsg)
-        }
-        responseBlob = await response.blob()
         url = URL.createObjectURL(responseBlob)
 
       } else if (engine === 'elevenlabs') {
@@ -351,37 +391,14 @@ function App() {
           setIsLoading(false)
           return
         }
-        
-        // Build free-tier voice settings payload
-        const voiceSettings = {
-          stability: elevenStability / 100,
-          similarity_boost: elevenSimilarity / 100
-        }
-
-        // Output format locked to standard free-tier compliant MP3 128kbps format
-        const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elevenVoiceId}?output_format=mp3_44100_128`, {
-          method: 'POST',
-          headers: {
-            'xi-api-key': elevenKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            text: text,
-            model_id: elevenModel,
-            voice_settings: voiceSettings
-          })
+        responseBlob = await synthesizeElevenLabsSpeech({
+          key: elevenKey,
+          voiceId: elevenVoiceId,
+          model: elevenModel,
+          text: text,
+          stability: elevenStability,
+          similarity: elevenSimilarity
         })
-        if (!response.ok) {
-          const errText = await response.text()
-          let errMsg = errText
-          try {
-            const errJson = JSON.parse(errText)
-            if (errJson.detail && errJson.detail.message) errMsg = errJson.detail.message
-            else if (errJson.message) errMsg = errJson.message
-          } catch (e) {}
-          throw new Error(errMsg)
-        }
-        responseBlob = await response.blob()
         url = URL.createObjectURL(responseBlob)
 
       } else if (engine === 'azure') {
@@ -390,17 +407,22 @@ function App() {
           setIsLoading(false)
           return
         }
-        const response = await fetch(`https://${azureRegion}.tts.speech.microsoft.com/cognitiveservices/v1`, {
-          method: 'POST',
-          headers: {
-            'Ocp-Apim-Subscription-Key': azureKey,
-            'Content-Type': 'application/ssml+xml',
-            'X-Microsoft-OutputFormat': 'audio-16khz-128kbitrate-mono-mp3'
-          },
-          body: `<speak version='1.0' xml:lang='en-US'><voice xml:lang='en-US' name='${azureVoice}'>${text}</voice></speak>`
+        responseBlob = await synthesizeAzureSpeech({
+          key: azureKey,
+          region: azureRegion,
+          voice: azureVoice,
+          text: text
         })
-        if (!response.ok) throw new Error('Azure TTS Error')
-        responseBlob = await response.blob()
+        url = URL.createObjectURL(responseBlob)
+
+      } else if (engine === 'sarvam') {
+        responseBlob = await synthesizeSarvamSpeech({
+          model: sarvamModel,
+          text: text,
+          languageCode: sarvamLanguage,
+          speaker: sarvamSpeaker,
+          pace: sarvamPace
+        })
         url = URL.createObjectURL(responseBlob)
       }
 
@@ -495,7 +517,7 @@ function App() {
       <header className="app-header">
         <div className="logo-container">
           <div className="glow-circle"></div>
-          <span className="logo-text">VoxFlow<span className="accent-dot">.</span></span>
+          <span className="logo-text">AuraSpeak<span className="accent-dot">.</span></span>
         </div>
         <div className="tech-stack">
           <img src={reactLogo} className="logo-icon react-logo" alt="React" />
@@ -535,6 +557,12 @@ function App() {
             >
               Azure TTS
             </button>
+            <button 
+              className={`engine-tab ${engine === 'sarvam' ? 'active' : ''}`}
+              onClick={() => { setEngine('sarvam'); handleStop(); }}
+            >
+              Sarvam AI
+            </button>
           </div>
 
           {/* Main workspace box */}
@@ -560,276 +588,92 @@ function App() {
                 <h3 className="panel-subtitle">Parameters</h3>
 
                 {engine === 'openai' && (
-                  <div className="engine-controls">
-                    <div className="control-group">
-                      <label className="control-label">OpenAI API Key</label>
-                      <input 
-                        type="password"
-                        className="text-input-field"
-                        placeholder="Paste sk-... API Key"
-                        value={openaiKey}
-                        onChange={(e) => setOpenaiKey(e.target.value)}
-                      />
-                    </div>
-                    
-                    <div className="control-group">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                        <label className="control-label" style={{ marginBottom: 0 }}>Voice Tone</label>
-                        {isSyncingOpenaiVoices ? (
-                          <span style={{ fontSize: '11px', color: 'var(--accent)' }}>🔄 Syncing...</span>
-                        ) : (
-                          <button 
-                            onClick={syncOpenaiVoices} 
-                            style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '11px', cursor: 'pointer', padding: 0 }}
-                          >
-                            Sync Voices
-                          </button>
-                        )}
-                      </div>
-                      <div className="select-wrapper">
-                        <select 
-                          className="custom-select"
-                          value={openaiVoice}
-                          onChange={(e) => setOpenaiVoice(e.target.value)}
-                        >
-                          <option value="alloy">Alloy (Balanced)</option>
-                          <option value="echo">Echo (Warm)</option>
-                          <option value="fable">Fable (Narrative)</option>
-                          <option value="onyx">Onyx (Deep/Male)</option>
-                          <option value="nova">Nova (Energetic/Female)</option>
-                          <option value="shimmer">Shimmer (Professional)</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="control-group">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                        <label className="control-label" style={{ marginBottom: 0 }}>Quality Mode</label>
-                        {isSyncingOpenaiModels ? (
-                          <span style={{ fontSize: '11px', color: 'var(--accent)' }}>🔄 Syncing...</span>
-                        ) : (
-                          <button 
-                            onClick={syncOpenaiModels} 
-                            style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '11px', cursor: 'pointer', padding: 0 }}
-                          >
-                            Sync Models
-                          </button>
-                        )}
-                      </div>
-                      <div className="select-wrapper">
-                        <select 
-                          className="custom-select"
-                          value={openaiModel}
-                          onChange={(e) => setOpenaiModel(e.target.value)}
-                        >
-                          <option value="tts-1">TTS-1 (Standard)</option>
-                          <option value="tts-1-hd">TTS-1-HD (High Definition)</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="control-group">
-                      <label className="control-label">Output Audio Format</label>
-                      <div className="select-wrapper">
-                        <select 
-                          className="custom-select"
-                          value={openaiFormat}
-                          onChange={(e) => setOpenaiFormat(e.target.value)}
-                        >
-                          <option value="mp3">MP3</option>
-                          <option value="opus">Opus (Streaming/Low Latency)</option>
-                          <option value="aac">AAC (Optimized Compression)</option>
-                          <option value="flac">FLAC (Lossless)</option>
-                          <option value="wav">WAV (Uncompressed)</option>
-                          <option value="pcm">PCM (Raw Audio)</option>
-                        </select>
-                      </div>
-                    </div>
-                  </div>
+                  <OpenAIControls 
+                    openaiKey={openaiKey}
+                    setOpenaiKey={setOpenaiKey}
+                    openaiVoice={openaiVoice}
+                    setOpenaiVoice={setOpenaiVoice}
+                    openaiVoices={openaiVoices}
+                    isSyncingOpenaiVoices={isSyncingOpenaiVoices}
+                    syncOpenaiVoices={syncOpenaiVoices}
+                    openaiModel={openaiModel}
+                    setOpenaiModel={setOpenaiModel}
+                    openaiModels={openaiModels}
+                    isFetchingOpenaiModels={isFetchingOpenaiModels}
+                    syncOpenaiModels={syncOpenaiModels}
+                    openaiFormat={openaiFormat}
+                    setOpenaiFormat={setOpenaiFormat}
+                  />
                 )}
 
                 {engine === 'elevenlabs' && (
-                  <div className="engine-controls">
-                    <div className="control-group">
-                      <label className="control-label">ElevenLabs API Key</label>
-                      <input 
-                        type="password"
-                        className="text-input-field"
-                        placeholder="ElevenLabs API Key"
-                        value={elevenKey}
-                        onChange={(e) => setElevenKey(e.target.value)}
-                      />
-                    </div>
-                    
-                    <div className="control-group">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                        <label className="control-label" style={{ marginBottom: 0 }}>Voice Profile</label>
-                        {isFetchingVoices ? (
-                          <span style={{ fontSize: '11px', color: 'var(--accent)' }}>🔄 Syncing...</span>
-                        ) : (
-                          <button 
-                            onClick={fetchElevenVoices} 
-                            style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '11px', cursor: 'pointer', padding: 0 }}
-                          >
-                            Sync Voices
-                          </button>
-                        )}
-                      </div>
-                      <div className="select-wrapper">
-                        <select 
-                          className="custom-select"
-                          value={elevenVoiceId}
-                          onChange={(e) => setElevenVoiceId(e.target.value)}
-                        >
-                          {elevenVoices.map((v) => (
-                            <option key={v.voice_id} value={v.voice_id}>
-                              {v.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                    <div className="control-group">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                        <label className="control-label" style={{ marginBottom: 0 }}>Synthesis Model</label>
-                        {isFetchingModels ? (
-                          <span style={{ fontSize: '11px', color: 'var(--accent)' }}>🔄 Syncing...</span>
-                        ) : (
-                          <button 
-                            onClick={fetchElevenModels} 
-                            style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '11px', cursor: 'pointer', padding: 0 }}
-                          >
-                            Sync Models
-                          </button>
-                        )}
-                      </div>
-                      <div className="select-wrapper">
-                        <select 
-                          className="custom-select"
-                          value={elevenModel}
-                          onChange={(e) => setElevenModel(e.target.value)}
-                        >
-                          {elevenModels.map((m) => (
-                            <option key={m.model_id} value={m.model_id}>
-                              {m.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="control-group">
-                      <label className="control-label">Target Language</label>
-                      <div className="select-wrapper">
-                        <select 
-                          className="custom-select"
-                          value={elevenLanguage}
-                          onChange={(e) => setElevenLanguage(e.target.value)}
-                        >
-                          <option value="en">English</option>
-                          <option value="fr">French</option>
-                          <option value="hi">Hindi</option>
-                          <option value="de">German</option>
-                          <option value="es">Spanish</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    {/* Advanced parameters sliders in a single compact area */}
-                    <div className="advanced-settings-block">
-                      <h4 className="settings-section-subtitle">Advanced Voice Settings</h4>
-                      
-                      <div className="control-group slider-row-compact">
-                        <div className="slider-header">
-                          <span className="control-label-compact">Stability</span>
-                          <span className="slider-value-badge badge-stability">{elevenStability}%</span>
-                        </div>
-                        <input 
-                          type="range" min="0" max="100" 
-                          value={elevenStability} 
-                          onChange={(e) => setElevenStability(parseInt(e.target.value))}
-                          className="custom-slider slider-stability"
-                        />
-                        <span className="slider-hint">Consistent voice vs Expressive</span>
-                      </div>
-
-                      <div className="control-group slider-row-compact">
-                        <div className="slider-header">
-                          <span className="control-label-compact">Clarity / Similarity</span>
-                          <span className="slider-value-badge badge-similarity">{elevenSimilarity}%</span>
-                        </div>
-                        <input 
-                          type="range" min="0" max="100" 
-                          value={elevenSimilarity} 
-                          onChange={(e) => setElevenSimilarity(parseInt(e.target.value))}
-                          className="custom-slider slider-similarity"
-                        />
-                        <span className="slider-hint">Closer to original profile</span>
-                      </div>
-                    </div>
-                  </div>
+                  <ElevenLabsControls 
+                    elevenKey={elevenKey}
+                    setElevenKey={setElevenKey}
+                    elevenVoiceId={elevenVoiceId}
+                    setElevenVoiceId={setElevenVoiceId}
+                    elevenVoices={elevenVoices}
+                    isFetchingVoices={isFetchingVoices}
+                    fetchElevenVoices={fetchElevenVoices}
+                    elevenModel={elevenModel}
+                    setElevenModel={setElevenModel}
+                    elevenModels={elevenModels}
+                    isFetchingModels={isFetchingModels}
+                    fetchElevenModels={fetchElevenModels}
+                    elevenLanguage={elevenLanguage}
+                    setElevenLanguage={setElevenLanguage}
+                    elevenStability={elevenStability}
+                    setElevenStability={setElevenStability}
+                    elevenSimilarity={elevenSimilarity}
+                    setElevenSimilarity={setElevenSimilarity}
+                  />
                 )}
 
                 {engine === 'azure' && (
-                  <div className="engine-controls">
-                    <div className="control-group">
-                      <label className="control-label">Azure Service Key</label>
-                      <input 
-                        type="password"
-                        className="text-input-field"
-                        placeholder="Ocp-Apim-Subscription-Key"
-                        value={azureKey}
-                        onChange={(e) => setAzureKey(e.target.value)}
-                      />
-                    </div>
-                    <div className="control-group">
-                      <label className="control-label">Service Region</label>
-                      <input 
-                        type="text"
-                        className="text-input-field"
-                        placeholder="e.g. eastus"
-                        value={azureRegion}
-                        onChange={(e) => setAzureRegion(e.target.value)}
-                      />
-                    </div>
-                    <div className="control-group">
-                      <label className="control-label">Voice Character</label>
-                      <div className="select-wrapper">
-                        <select 
-                          className="custom-select"
-                          value={azureVoice}
-                          onChange={(e) => setAzureVoice(e.target.value)}
-                        >
-                          <option value="en-US-JennyNeural">Jenny (Neural - Female)</option>
-                          <option value="en-US-GuyNeural">Guy (Neural - Male)</option>
-                          <option value="en-US-AriaNeural">Aria (Neural - Female)</option>
-                          <option value="en-GB-SoniaNeural">Sonia (Neural UK - Female)</option>
-                          <option value="en-GB-RyanNeural">Ryan (Neural UK - Male)</option>
-                        </select>
-                      </div>
-                    </div>
-                  </div>
+                  <AzureControls 
+                    azureKey={azureKey}
+                    setAzureKey={setAzureKey}
+                    azureRegion={azureRegion}
+                    setAzureRegion={setAzureRegion}
+                    azureVoice={azureVoice}
+                    setAzureVoice={setAzureVoice}
+                  />
+                )}
+
+                {engine === 'sarvam' && (
+                  <SarvamControls 
+                    sarvamModel={sarvamModel}
+                    setSarvamModel={setSarvamModel}
+                    sarvamLanguage={sarvamLanguage}
+                    setSarvamLanguage={setSarvamLanguage}
+                    sarvamSpeaker={sarvamSpeaker}
+                    setSarvamSpeaker={setSarvamSpeaker}
+                    sarvamPace={sarvamPace}
+                    setSarvamPace={setSarvamPace}
+                  />
                 )}
 
                 {/* Client Side Playback Speed (Applies to all engines, compact design) */}
-                <div className="control-group slider-row-compact" style={{ marginTop: '14px', borderTop: '1px solid var(--border)', paddingTop: '14px' }}>
-                  <div className="slider-header">
-                    <span className="control-label-compact">Playback Speed</span>
-                    <span className="slider-value-badge badge-speed">{playbackSpeed.toFixed(2)}x</span>
+                {engine !== 'sarvam' && (
+                  <div className="control-group slider-row-compact" style={{ marginTop: '14px', borderTop: '1px solid var(--border)', paddingTop: '14px' }}>
+                    <div className="slider-header">
+                      <span className="control-label-compact">Playback Speed</span>
+                      <span className="slider-value-badge badge-speed">{playbackSpeed.toFixed(2)}x</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min={engine === 'openai' ? "0.25" : "0.70"} 
+                      max={engine === 'openai' ? "4.00" : "1.50"} 
+                      step={engine === 'openai' ? "0.05" : "0.1"} 
+                      value={playbackSpeed} 
+                      onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
+                      className="custom-slider slider-speed"
+                    />
+                    <span className="slider-hint">
+                      {engine === 'openai' ? 'API-synthesized natural speech rate' : 'Client-side rendering playback speed adjustment'}
+                    </span>
                   </div>
-                  <input 
-                    type="range" 
-                    min={engine === 'openai' ? "0.25" : "0.70"} 
-                    max={engine === 'openai' ? "4.00" : "1.50"} 
-                    step={engine === 'openai' ? "0.05" : "0.1"} 
-                    value={playbackSpeed} 
-                    onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
-                    className="custom-slider slider-speed"
-                  />
-                  <span className="slider-hint">
-                    {engine === 'openai' ? 'API-synthesized natural speech rate' : 'Client-side rendering playback speed adjustment'}
-                  </span>
-                </div>
+                )}
 
                 {/* Actions */}
                 <div className="actions-wrapper">
@@ -1060,6 +904,52 @@ function App() {
                           <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                         </svg>
                         Supports MP3, WAV, and PCM outputs natively
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {engine === 'sarvam' && (
+              <div className="premium-detail-card theme-sarvam animate-fade">
+                <div className="premium-card-header">
+                  <div className="glow-badge bg-sarvam">Sarvam AI Active</div>
+                  <div className="header-meta">
+                    <span className="meta-cost">Indic Language Specialist</span>
+                  </div>
+                </div>
+                <div className="premium-card-grid">
+                  <div className="premium-grid-col col-plans">
+                    <h4 className="col-title">Model Specifications</h4>
+                    <div className="pricing-pill">
+                      <span className="pill-name">Bulbul v3 Model</span>
+                      <span className="pill-price">Pay-As-You-Go</span>
+                    </div>
+                    <div className="rec-badge" style={{ marginTop: '16px', background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)', borderRadius: '8px', padding: '12px', fontSize: '13px' }}>
+                      <strong>🏆 Project Rank:</strong> Specially tuned for Indian languages (Hindi, Bengali, Tamil, Telugu, etc.) with native accent and natural regional flow.
+                    </div>
+                  </div>
+                  <div className="premium-grid-col col-features">
+                    <h4 className="col-title">Core Capabilities & Features</h4>
+                    <ul className="feature-check-list">
+                      <li>
+                        <svg className="check-icon text-sarvam" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                        </svg>
+                        30+ Expressive Indian voices and 11 language codes supported
+                      </li>
+                      <li>
+                        <svg className="check-icon text-sarvam" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                        </svg>
+                        High quality WAV audio format synthesis
+                      </li>
+                      <li>
+                        <svg className="check-icon text-sarvam" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                        </svg>
+                        Pace control (0.5x to 2.0x) natively supported in requests
                       </li>
                     </ul>
                   </div>

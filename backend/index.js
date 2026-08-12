@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import ttsRoutes from './routes/ttsRoutes.js';
 
 dotenv.config();
 
@@ -14,6 +15,9 @@ app.use(express.json());
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Backend server is running' });
 });
+
+// API Routes
+app.use('/api', ttsRoutes);
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
